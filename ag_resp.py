@@ -5,7 +5,8 @@ import torch
 from evaluate import load
 from tqdm import tqdm
 import numpy as np
-
+from evaluate import load
+import pandas as pd 
 # ------------------------
 # 1. Install Required Libraries
 # ------------------------
@@ -125,7 +126,9 @@ def preprocess_function(dataset):
     return model_inputs
 
 
-
+train = Dataset.from_dict(train)
+valid = Dataset.from_dict(valid)
+test = Dataset.from_dict(test)
 train = train.map(preprocess_function, batched=True)
 valid = valid.map(preprocess_function, batched = True)
 test = test.map(preprocess_function, batched = True)
@@ -160,6 +163,32 @@ trainer = Trainer(
     tokenizer=tokenizer,
     callbacks=[EarlyStoppingCallback(early_stopping_patience=2)]
 )
+
+# --------------------------------------#
+#  Get a Baseline of the Untrained Model#
+# --------------------------------------#
+
+model2 = model.to('cuda')
+model2.eval()
+
+all_inputs_untrained = test["processed_method"]
+batch_size = 8  
+decoded_outputs = []
+for i in tqdm(range(0, len(all_inputs_untrained), batch_size)):
+    batch = all_inputs_untrained[i:i+batch_size]
+
+    # Tokenize batch
+    inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    inputs = {k: v.to('cuda') for k, v in inputs.items()}
+
+    with torch.no_grad():
+        outputs_untrained = model2.generate(**inputs, max_length=256)
+
+    # Decode each output
+    decoded_batch = tokenizer.batch_decode(outputs_untrained, skip_special_tokens=True)
+    decoded_outputs.extend(decoded_batch)
+    outputs_untrained = decoded_outputs
+
 
 # ------------------------
 # 6. Train the Model
@@ -206,6 +235,7 @@ for i in tqdm(range(0, len(all_inputs), batch_size)):
     print(test["target_block"][i])
     print(f"Prediction: {decoded_outputs[i]}")
 """
+outputs_trained = decoded_outputs
 rouge = load("rouge")
 
 # Calculate the ROUGE scores
@@ -216,3 +246,14 @@ print("ROUGE Scores:")
 for metric, score in rouge_scores.items():
     print(f"{metric}: {round(score, 4)}")
 print("Overall ROUGE Score: ", sum(rouge_scores.values()) / len(rouge_scores))
+
+#Store results in results.csv 
+df = pd.DataFrame({
+    "inputs": test["processed_method"],
+    "target_block": test["target_block"],
+    "untrained_model_predictions": outputs_untrained,
+    "trained_model_predictions": outputs_trained
+})
+
+df.to_csv("results.csv", index=False)
+print("Saved to results.csv")
